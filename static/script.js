@@ -28,6 +28,11 @@ let startTime = null;
 let frameCount = 0;
 let lastFrameTime = Date.now();
 
+// GPS and Report Generation (Live Detection Only)
+let currentLocation = null;
+let liveDetections = [];  // Store detections for report
+let watchId = null;  // GPS watch ID
+
 // Upload Area Click
 uploadArea.addEventListener('click', () => {
     fileInput.click();
@@ -95,6 +100,8 @@ cameraBtn.addEventListener('click', async () => {
 
             // Start detection loop
             startTime = Date.now();
+            liveDetections = [];  // Reset detections for new session
+            startGPSTracking();  // Start GPS tracking for live detection
             startDetectionLoop();
         };
 
@@ -146,40 +153,25 @@ function startDetectionLoop() {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ frame: frameData })
-            });
-
-            const data = await response.json();
-
-            if (data.success) {
-                // Update detection count
-                liveCount.textContent = data.count;
-
-                // Draw bounding boxes on canvas
-                drawDetections(data.detections);
-
-                // Update FPS
-                frameCount++;
-                const now = Date.now();
-                const elapsed = (now - lastFrameTime) / 1000;
-                if (elapsed >= 1) {
+                if(elapsed >= 1) {
                     const fps = Math.round(frameCount / elapsed);
-                    fpsDisplay.textContent = fps;
-                    frameCount = 0;
-                    lastFrameTime = now;
-                }
+            fpsDisplay.textContent = fps;
+            frameCount = 0;
+            lastFrameTime = now;
+        }
 
                 // Update recording time
                 const recordingElapsed = Math.floor((now - startTime) / 1000);
-                const minutes = Math.floor(recordingElapsed / 60);
-                const seconds = recordingElapsed % 60;
-                recordingTime.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-            }
+        const minutes = Math.floor(recordingElapsed / 60);
+        const seconds = recordingElapsed % 60;
+        recordingTime.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
 
         } catch (error) {
-            console.error('Detection error:', error);
-        } finally {
-            isProcessing = false;
-        }
+    console.error('Detection error:', error);
+} finally {
+    isProcessing = false;
+}
 
     }, 200); // Process every 200ms (5 FPS)
 }
@@ -361,7 +353,133 @@ newAnalysisBtn.addEventListener('click', () => {
 // Clean up on page unload
 window.addEventListener('beforeunload', () => {
     stopVideoDetection();
+    stopGPSTracking();
 });
 
 // Add smooth scroll behavior
 document.documentElement.style.scrollBehavior = 'smooth';
+
+// ========== GPS TRACKING AND REPORT GENERATION ==========
+
+function startGPSTracking() {
+    if (!navigator.geolocation) {
+        console.warn('Geolocation not supported');
+        return;
+    }
+
+    // Request GPS permission and start watching position
+    watchId = navigator.geolocation.watchPosition(
+        (position) => {
+            currentLocation = {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+                accuracy: position.coords.accuracy
+            };
+            console.log('GPS location updated:', currentLocation);
+        },
+        (error) => {
+            console.warn('GPS error:', error.message);
+            currentLocation = null;
+        },
+        {
+            enableHighAccuracy: true,
+            timeout: 5000,
+            maximumAge: 0
+        }
+    );
+}
+
+function stopGPSTracking() {
+    if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+    }
+}
+
+// Modified stopVideoDetection to include report prompt
+const originalStopVideoDetection = stopVideoDetection;
+function stopVideoDetection() {
+    originalStopVideoDetection();
+    stopGPSTracking();
+
+    // If detections were made, ask if user wants a report
+    if (liveDetections.length > 0) {
+        setTimeout(() => {
+            if (confirm(`${liveDetections.length} pothole(s) detected! Would you like to download a report with GPS location?`)) {
+                generateReport();
+            }
+        }, 500);
+    }
+
+    // Reset detections
+    liveDetections = [];
+}
+
+async function generateReport() {
+    try {
+        // Capture current frame from video
+        const canvas = document.createElement('canvas');
+        canvas.width = videoFeed.videoWidth || 640;
+        canvas.height = videoFeed.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(videoFeed, 0, 0);
+        const imageData = canvas.toDataURL('image/jpeg', 0.8);
+
+        // Prepare report data
+        const reportData = {
+            detections: liveDetections,
+            location: currentLocation,
+            image: imageData
+        };
+
+        // Show loading
+        loadingOverlay.style.display = 'flex';
+        loadingOverlay.querySelector('p').textContent = 'Generating report...';
+
+        // Send request to generate PDF
+        const response = await fetch('/generate_report', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(reportData)
+        });
+
+        if (response.ok) {
+            // Download the PDF
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `pothole_report_${new Date().getTime()}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+            alert('Report downloaded successfully!');
+        } else {
+            alert('Failed to generate report. Please try again.');
+        }
+
+    } catch (error) {
+        console.error('Report generation error:', error);
+        alert('Error generating report: ' + error.message);
+    } finally {
+        loadingOverlay.style.display = 'none';
+        loadingOverlay.querySelector('p').textContent = 'Analyzing image with AI...';
+    }
+}
+
+// Store detections from live feed (modify existing detection handling)
+// This will be called when detections are received
+function storeDetection(detection) {
+    // Add timestamp
+    detection.timestamp = new Date().toISOString();
+    liveDetections.push(detection);
+
+    // Keep only last 50 detections to avoid memory issues
+    if (liveDetections.length > 50) {
+        liveDetections.shift();
+    }
+}

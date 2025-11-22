@@ -2,7 +2,7 @@
 Flask web application for pothole detection.
 """
 
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
 from werkzeug.utils import secure_filename
 from pathlib import Path
 import os
@@ -14,6 +14,8 @@ from PIL import Image
 import base64
 from io import BytesIO
 from depth_estimator import get_depth_estimator
+from report_generator import get_report_generator
+from datetime import datetime
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
@@ -224,6 +226,50 @@ def serve_result(filename):
 def serve_upload(filename):
     """Serve uploaded images."""
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route('/generate_report', methods=['POST'])
+def generate_report():
+    """Generate a PDF report for detected potholes with GPS location."""
+    try:
+        data = request.json
+        detections = data.get('detections', [])
+        location = data.get('location')  # {latitude, longitude, accuracy}
+        image_data = data.get('image')  # Base64 image
+        
+        if not detections:
+            return jsonify({'success': False, 'error': 'No detections provided'}), 400
+        
+        # Save image temporarily if provided
+        image_path = None
+        if image_data:
+            # Decode base64 image
+            image_bytes = base64.b64decode(image_data.split(',')[1])
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            image_filename = f'report_image_{timestamp}.jpg'
+            image_path = Path(app.config['UPLOAD_FOLDER']) / image_filename
+            
+            with open(image_path, 'wb') as f:
+                f.write(image_bytes)
+        
+        # Generate PDF report
+        report_gen = get_report_generator()
+        report_path = report_gen.generate_report(
+            detections=detections,
+            location=location,
+            image_path=str(image_path) if image_path else None
+        )
+        
+        # Return the report file
+        return send_file(
+            report_path,
+            as_attachment=True,
+            download_name=Path(report_path).name,
+            mimetype='application/pdf'
+        )
+        
+    except Exception as e:
+        print(f"Error generating report: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
     print("=" * 60)
