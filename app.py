@@ -30,8 +30,8 @@ MODEL_PATH = 'runs/detect/pothole_detector2/weights/best.pt'
 
 # Depth estimator (will be loaded on first request)
 depth_estimator = None
-# Disable depth estimation by default for deployment (memory intensive)
-USE_DEPTH_ESTIMATION = os.getenv('USE_DEPTH_ESTIMATION', 'false').lower() == 'true'
+# Enable depth estimation for local use
+USE_DEPTH_ESTIMATION = True
 
 def load_model():
     """Load the trained YOLO model."""
