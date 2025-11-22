@@ -30,7 +30,8 @@ MODEL_PATH = 'runs/detect/pothole_detector2/weights/best.pt'
 
 # Depth estimator (will be loaded on first request)
 depth_estimator = None
-USE_DEPTH_ESTIMATION = True  # Set to False to disable severity classification
+# Disable depth estimation by default for deployment (memory intensive)
+USE_DEPTH_ESTIMATION = os.getenv('USE_DEPTH_ESTIMATION', 'false').lower() == 'true'
 
 def load_model():
     """Load the trained YOLO model."""
@@ -38,13 +39,15 @@ def load_model():
     if model is None:
         model_file = Path(MODEL_PATH)
         if model_file.exists():
-            print(f"Loading model from {MODEL_PATH}...")
+            print(f"Loading trained model from {MODEL_PATH}...")
             model = YOLO(MODEL_PATH)
-            print("Model loaded successfully!")
+            print("Trained model loaded successfully!")
         else:
-            print(f"Warning: Model not found at {MODEL_PATH}")
-            print("Using pretrained YOLOv8 model for demo purposes")
-            model = YOLO('yolov8n.pt')
+            print(f"Trained model not found at {MODEL_PATH}")
+            print("Using pretrained YOLOv8n model for general object detection")
+            print("Note: This model is not specifically trained for potholes")
+            model = YOLO('yolov8n.pt')  # Use pretrained model
+            print("Pretrained model loaded successfully!")
     return model
 
 def detect_potholes_in_image(image_path):
