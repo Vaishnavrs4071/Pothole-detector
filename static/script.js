@@ -28,6 +28,11 @@ let startTime = null;
 let frameCount = 0;
 let lastFrameTime = Date.now();
 
+// GPS and Report Generation (Live Detection Only)
+let currentLocation = null;
+let liveDetections = [];
+let watchId = null;
+
 // Upload Area Click
 uploadArea.addEventListener('click', () => {
     fileInput.click();
@@ -95,6 +100,8 @@ cameraBtn.addEventListener('click', async () => {
 
             // Start detection loop
             startTime = Date.now();
+            liveDetections = [];  // Reset detections
+            startGPSTracking();  // Start GPS tracking
             startDetectionLoop();
         };
 
@@ -154,7 +161,21 @@ function startDetectionLoop() {
                 // Update detection count
                 liveCount.textContent = data.count;
 
-                // Draw bounding boxes on canvas
+                // Store detections for report
+                if (data.detections && data.detections.length > 0) {
+                    data.detections.forEach(det => {
+                        liveDetections.push({
+                            ...det,
+                            timestamp: new Date().toISOString()
+                        });
+                    });
+                    // Keep only last 50
+                    if (liveDetections.length > 50) {
+                        liveDetections = liveDetections.slice(-50);
+                    }
+                }
+
+                // Draw bounding boxes
                 drawDetections(data.detections);
 
                 // Update FPS
@@ -360,8 +381,130 @@ newAnalysisBtn.addEventListener('click', () => {
 
 // Clean up on page unload
 window.addEventListener('beforeunload', () => {
-    stopVideoDetection();
+    if (videoStream) {
+        stopVideoDetection();
+    }
+    if (watchId) {
+        stopGPSTracking();
+    }
 });
 
 // Add smooth scroll behavior
 document.documentElement.style.scrollBehavior = 'smooth';
+
+// ========== GPS TRACKING AND REPORT GENERATION ==========
+
+function startGPSTracking() {
+    if (!navigator.geolocation) {
+        console.warn('Geolocation not supported');
+        return;
+    }
+
+    watchId = navigator.geolocation.watchPosition(
+        (position) => {
+            currentLocation = {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+                accuracy: position.coords.accuracy
+            };
+            console.log('GPS updated:', currentLocation);
+        },
+        (error) => {
+            console.warn('GPS error:', error.message);
+        },
+        {
+            enableHighAccuracy: true,
+            timeout: 5000,
+            maximumAge: 0
+        }
+    );
+}
+
+function stopGPSTracking() {
+    if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+    }
+}
+
+// Override stop button to add report prompt
+const originalStopBtn = stopVideoBtn.cloneNode(true);
+stopVideoBtn.parentNode.replaceChild(originalStopBtn, stopVideoBtn);
+
+originalStopBtn.addEventListener('click', () => {
+    // Stop video first
+    if (detectionInterval) {
+        clearInterval(detectionInterval);
+        detectionInterval = null;
+    }
+    if (videoStream) {
+        videoStream.getTracks().forEach(track => track.stop());
+        videoStream = null;
+    }
+    if (detectionCanvas) {
+        const ctx = detectionCanvas.getContext('2d');
+        ctx.clearRect(0, 0, detectionCanvas.width, detectionCanvas.height);
+    }
+    frameCount = 0;
+    startTime = null;
+
+    stopGPSTracking();
+
+    // Show upload section
+    document.querySelector('.upload-section').style.display = 'block';
+    videoSection.style.display = 'none';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    // Ask for report if detections exist
+    if (liveDetections.length > 0) {
+        setTimeout(() => {
+            if (confirm(`${liveDetections.length} pothole(s) detected! Download PDF report with GPS location?`)) {
+                generateReport();
+            } else {
+                liveDetections = [];
+            }
+        }, 500);
+    }
+});
+
+async function generateReport() {
+    try {
+        loadingOverlay.style.display = 'flex';
+        loadingOverlay.querySelector('p').textContent = 'Generating PDF report...';
+
+        // Prepare data
+        const reportData = {
+            detections: liveDetections,
+            location: currentLocation,
+            image: null  // We don't have the frame anymore
+        };
+
+        const response = await fetch('/generate_report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(reportData)
+        });
+
+        if (response.ok) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `pothole_report_${Date.now()}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            alert('Report downloaded successfully!');
+        } else {
+            alert('Failed to generate report');
+        }
+    } catch (error) {
+        console.error('Report error:', error);
+        alert('Error generating report: ' + error.message);
+    } finally {
+        loadingOverlay.style.display = 'none';
+        loadingOverlay.querySelector('p').textContent = 'Analyzing image with AI...';
+        liveDetections = [];
+    }
+}
