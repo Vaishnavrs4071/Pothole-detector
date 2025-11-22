@@ -1,0 +1,8 @@
+# Pothole Detection Dataset
+path: ./data  # dataset root dir
+train: train/images  # train images
+val: valid/images  # val images
+
+# Classes
+names:
+  0: pothole
